@@ -1,0 +1,450 @@
+name: Terraform CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      terraform_action:
+        description: 'Terraform action to perform'
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+      environment:
+        description: 'Environment (dev/staging/prod)'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      use_tfvars_file:
+        description: 'Use tfvars file (terraform.tfvars.ENV) instead of individual parameters'
+        required: false
+        type: boolean
+        default: false
+      
+      # Core Parameters
+      aws_region:
+        description: 'AWS region to deploy resources'
+        required: false
+        type: string
+        default: 'us-east-1'
+      name_prefix:
+        description: 'Resource name prefix'
+        required: false
+        type: string
+        default: 'landing'
+      
+      # Networking Parameters
+      vpc_cidr_block:
+        description: 'VPC CIDR block (e.g., 10.0.0.0/16)'
+        required: false
+        type: string
+        default: '10.0.0.0/16'
+      public_subnet_count:
+        description: 'Number of public subnets'
+        required: false
+        type: string
+        default: '2'
+      private_subnet_count:
+        description: 'Number of private subnets'
+        required: false
+        type: string
+        default: '2'
+      enable_nat_gateway:
+        description: 'Enable NAT gateway for private subnets'
+        required: false
+        type: boolean
+        default: true
+      single_nat_gateway:
+        description: 'Use single NAT gateway (vs per-AZ)'
+        required: false
+        type: boolean
+        default: true
+      ec2_use_public_subnets:
+        description: 'Place EC2 instances in public subnets'
+        required: false
+        type: boolean
+        default: true
+      
+      # Compute Parameters
+      compute_os:
+        description: 'Which OS to create (linux/windows/both/none)'
+        required: false
+        type: choice
+        options:
+          - linux
+          - windows
+          - both
+          - none
+        default: 'both'
+      linux_instance_count:
+        description: 'Number of Linux instances'
+        required: false
+        type: string
+        default: '0'
+      windows_instance_count:
+        description: 'Number of Windows instances'
+        required: false
+        type: string
+        default: '0'
+      compute_enable_ssm:
+        description: 'Enable SSM for instance access'
+        required: false
+        type: boolean
+        default: false
+      
+      # Load Balancer Parameters
+      enable_alb:
+        description: 'Enable Application Load Balancer'
+        required: false
+        type: boolean
+        default: false
+      alb_listener_port:
+        description: 'ALB listener port'
+        required: false
+        type: string
+        default: '80'
+      alb_enable_https:
+        description: 'Enable HTTPS on ALB'
+        required: false
+        type: boolean
+        default: false
+      alb_certificate_arn:
+        description: 'ACM certificate ARN for HTTPS (required if HTTPS enabled)'
+        required: false
+        type: string
+        default: ''
+      app_port:
+        description: 'Application port (target group port)'
+        required: false
+        type: string
+        default: '80'
+      enforce_alb_only_ingress:
+        description: 'Only allow ALB to instance traffic'
+        required: false
+        type: boolean
+        default: false
+      
+      # Storage Parameters
+      create_s3_bucket:
+        description: 'Create S3 bucket'
+        required: false
+        type: boolean
+        default: true
+      
+      # Database Parameters
+      create_rds:
+        description: 'Create RDS database'
+        required: false
+        type: boolean
+        default: true
+      rds_engine:
+        description: 'RDS engine (mysql, postgres, etc.)'
+        required: false
+        type: string
+        default: 'mysql'
+      rds_engine_version:
+        description: 'RDS engine version'
+        required: false
+        type: string
+        default: '8.0'
+      rds_instance_class:
+        description: 'RDS instance class'
+        required: false
+        type: string
+        default: 'db.t3.micro'
+      rds_allocated_storage:
+        description: 'RDS allocated storage in GB'
+        required: false
+        type: string
+        default: '20'
+      rds_username:
+        description: 'RDS database username'
+        required: false
+        type: string
+        default: 'admin'
+      rds_password:
+        description: 'RDS database password (sensitive)'
+        required: false
+        type: string
+      rds_db_name:
+        description: 'RDS database name'
+        required: false
+        type: string
+        default: 'appdb'
+      rds_multi_az:
+        description: 'RDS Multi-AZ deployment'
+        required: false
+        type: boolean
+        default: false
+      rds_publicly_accessible:
+        description: 'RDS publicly accessible'
+        required: false
+        type: boolean
+        default: false
+      rds_backup_retention_period:
+        description: 'RDS backup retention period (days)'
+        required: false
+        type: string
+        default: '7'
+      rds_deletion_protection:
+        description: 'RDS deletion protection'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  TF_VERSION: '1.6.0'
+  # AWS_REGION will be set from input or default in Prepare Terraform Variables step
+
+jobs:
+  terraform:
+    name: Terraform ${{ github.event_name == 'pull_request' && 'Plan' || 'Apply' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        # Use this step if using OIDC (recommended)
+        # Set AWS_ROLE_ARN secret in GitHub repository settings
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: GitHubActions-Terraform
+          aws-region: ${{ github.event.inputs.aws_region || secrets.AWS_REGION || 'us-east-1' }}
+
+      # Alternative: Use Access Keys (uncomment below and comment above if using access keys)
+      # - name: Configure AWS credentials (Access Keys)
+      #   uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      #     aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      #     aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check
+        continue-on-error: true
+
+      - name: Terraform Init
+        id: init
+        run: |
+          AWS_REGION_VALUE="${{ github.event.inputs.aws_region || secrets.AWS_REGION || 'us-east-1' }}"
+          if [ -f backend.tf ]; then
+            terraform init
+          else
+            terraform init \
+              -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+              -backend-config="key=${{ secrets.TF_STATE_KEY }}" \
+              -backend-config="region=$AWS_REGION_VALUE"
+          fi
+
+      - name: Prepare Terraform Variables
+        id: tfvars
+        run: |
+          # Determine environment
+          ENV="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'default' }}"
+          echo "ENVIRONMENT=$ENV" >> $GITHUB_ENV
+          
+          # Check if using tfvars file
+          USE_TFVARS="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.use_tfvars_file || 'false' }}"
+          
+          if [ "$USE_TFVARS" == "true" ] && [ -f "terraform.tfvars.$ENV" ]; then
+            echo "Using tfvars file: terraform.tfvars.$ENV"
+            echo "USE_TFVARS_FILE=true" >> $GITHUB_ENV
+            echo "TFVARS_FILE=terraform.tfvars.$ENV" >> $GITHUB_ENV
+          else
+            echo "Using individual variables from secrets/inputs"
+            echo "USE_TFVARS_FILE=false" >> $GITHUB_ENV
+            
+            # Prepare TF_VAR_* environment variables
+            # Priority: Workflow Inputs > Secrets > Defaults
+            {
+              echo "TF_VAR_aws_region=${{ github.event.inputs.aws_region || secrets.AWS_REGION || env.AWS_REGION || 'us-east-1' }}"
+              echo "TF_VAR_name_prefix=${{ github.event.inputs.name_prefix || secrets.NAME_PREFIX || 'landing' }}"
+              echo "TF_VAR_vpc_cidr_block=${{ github.event.inputs.vpc_cidr_block || secrets.VPC_CIDR_BLOCK || '10.0.0.0/16' }}"
+              echo "TF_VAR_public_subnet_count=${{ github.event.inputs.public_subnet_count || secrets.PUBLIC_SUBNET_COUNT || '2' }}"
+              echo "TF_VAR_private_subnet_count=${{ github.event.inputs.private_subnet_count || secrets.PRIVATE_SUBNET_COUNT || '2' }}"
+              echo "TF_VAR_enable_nat_gateway=${{ github.event.inputs.enable_nat_gateway != '' && github.event.inputs.enable_nat_gateway || secrets.ENABLE_NAT_GATEWAY || 'true' }}"
+              echo "TF_VAR_single_nat_gateway=${{ github.event.inputs.single_nat_gateway != '' && github.event.inputs.single_nat_gateway || secrets.SINGLE_NAT_GATEWAY || 'true' }}"
+              echo "TF_VAR_ec2_use_public_subnets=${{ github.event.inputs.ec2_use_public_subnets != '' && github.event.inputs.ec2_use_public_subnets || secrets.EC2_USE_PUBLIC_SUBNETS || 'true' }}"
+              echo "TF_VAR_compute_os=${{ github.event.inputs.compute_os || secrets.COMPUTE_OS || 'both' }}"
+              echo "TF_VAR_linux_instance_count=${{ github.event.inputs.linux_instance_count || secrets.LINUX_INSTANCE_COUNT || '0' }}"
+              echo "TF_VAR_windows_instance_count=${{ github.event.inputs.windows_instance_count || secrets.WINDOWS_INSTANCE_COUNT || '0' }}"
+              echo "TF_VAR_compute_enable_ssm=${{ github.event.inputs.compute_enable_ssm != '' && github.event.inputs.compute_enable_ssm || secrets.COMPUTE_ENABLE_SSM || 'false' }}"
+              echo "TF_VAR_enable_alb=${{ github.event.inputs.enable_alb != '' && github.event.inputs.enable_alb || secrets.ENABLE_ALB || 'false' }}"
+              echo "TF_VAR_alb_listener_port=${{ github.event.inputs.alb_listener_port || secrets.ALB_LISTENER_PORT || '80' }}"
+              echo "TF_VAR_alb_enable_https=${{ github.event.inputs.alb_enable_https != '' && github.event.inputs.alb_enable_https || secrets.ALB_ENABLE_HTTPS || 'false' }}"
+              echo "TF_VAR_alb_certificate_arn=${{ github.event.inputs.alb_certificate_arn || secrets.ALB_CERTIFICATE_ARN || '' }}"
+              echo "TF_VAR_app_port=${{ github.event.inputs.app_port || secrets.APP_PORT || '80' }}"
+              echo "TF_VAR_enforce_alb_only_ingress=${{ github.event.inputs.enforce_alb_only_ingress != '' && github.event.inputs.enforce_alb_only_ingress || secrets.ENFORCE_ALB_ONLY_INGRESS || 'false' }}"
+              echo "TF_VAR_create_s3_bucket=${{ github.event.inputs.create_s3_bucket != '' && github.event.inputs.create_s3_bucket || secrets.CREATE_S3_BUCKET || 'true' }}"
+              echo "TF_VAR_create_rds=${{ github.event.inputs.create_rds != '' && github.event.inputs.create_rds || secrets.CREATE_RDS || 'true' }}"
+              echo "TF_VAR_rds_engine=${{ github.event.inputs.rds_engine || secrets.RDS_ENGINE || 'mysql' }}"
+              echo "TF_VAR_rds_engine_version=${{ github.event.inputs.rds_engine_version || secrets.RDS_ENGINE_VERSION || '8.0' }}"
+              echo "TF_VAR_rds_instance_class=${{ github.event.inputs.rds_instance_class || secrets.RDS_INSTANCE_CLASS || 'db.t3.micro' }}"
+              echo "TF_VAR_rds_allocated_storage=${{ github.event.inputs.rds_allocated_storage || secrets.RDS_ALLOCATED_STORAGE || '20' }}"
+              echo "TF_VAR_rds_username=${{ github.event.inputs.rds_username || secrets.RDS_USERNAME || 'admin' }}"
+              echo "TF_VAR_rds_password=${{ github.event.inputs.rds_password || secrets.RDS_PASSWORD }}"
+              echo "TF_VAR_rds_db_name=${{ github.event.inputs.rds_db_name || secrets.RDS_DB_NAME || 'appdb' }}"
+              echo "TF_VAR_rds_multi_az=${{ github.event.inputs.rds_multi_az != '' && github.event.inputs.rds_multi_az || secrets.RDS_MULTI_AZ || 'false' }}"
+              echo "TF_VAR_rds_publicly_accessible=${{ github.event.inputs.rds_publicly_accessible != '' && github.event.inputs.rds_publicly_accessible || secrets.RDS_PUBLICLY_ACCESSIBLE || 'false' }}"
+              echo "TF_VAR_rds_backup_retention_period=${{ github.event.inputs.rds_backup_retention_period || secrets.RDS_BACKUP_RETENTION_PERIOD || '7' }}"
+              echo "TF_VAR_rds_deletion_protection=${{ github.event.inputs.rds_deletion_protection != '' && github.event.inputs.rds_deletion_protection || secrets.RDS_DELETION_PROTECTION || 'false' }}"
+            } >> $GITHUB_ENV
+          fi
+          
+          # Set tags as JSON (if provided via secrets - tags not available as input)
+          if [ -n "${{ secrets.TAGS }}" ]; then
+            echo "TF_VAR_tags=${{ secrets.TAGS }}" >> $GITHUB_ENV
+          fi
+          
+          # Display which values are being used (non-sensitive)
+          echo "📋 Using parameters:"
+          echo "  - AWS Region: ${{ github.event.inputs.aws_region || secrets.AWS_REGION || env.AWS_REGION || 'us-east-1' }}"
+          echo "  - Name Prefix: ${{ github.event.inputs.name_prefix || secrets.NAME_PREFIX || 'landing' }}"
+          echo "  - Compute OS: ${{ github.event.inputs.compute_os || secrets.COMPUTE_OS || 'both' }}"
+          echo "  - Linux Instances: ${{ github.event.inputs.linux_instance_count || secrets.LINUX_INSTANCE_COUNT || '0' }}"
+          echo "  - Windows Instances: ${{ github.event.inputs.windows_instance_count || secrets.WINDOWS_INSTANCE_COUNT || '0' }}"
+          echo "  - Enable ALB: ${{ github.event.inputs.enable_alb != '' && github.event.inputs.enable_alb || secrets.ENABLE_ALB || 'false' }}"
+          echo "  - Create RDS: ${{ github.event.inputs.create_rds != '' && github.event.inputs.create_rds || secrets.CREATE_RDS || 'true' }}"
+          echo "  - Create S3: ${{ github.event.inputs.create_s3_bucket != '' && github.event.inputs.create_s3_bucket || secrets.CREATE_S3_BUCKET || 'true' }}"
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+
+      # ============================================
+      # TERRAFORM PLAN ACTION
+      # ============================================
+      - name: 🔍 Terraform Plan - Execute Plan
+        id: plan
+        if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.terraform_action == 'plan' || env.TERRAFORM_ACTION == 'plan'))
+        run: |
+          echo "🚀 Executing Terraform Plan..."
+          if [ "$USE_TFVARS_FILE" == "true" ]; then
+            terraform plan -no-color -var-file="$TFVARS_FILE" -out=tfplan
+          else
+            terraform plan -no-color -out=tfplan
+          fi
+          terraform show -no-color tfplan > tfplan.txt
+          echo "✅ Terraform Plan completed successfully"
+        continue-on-error: true
+
+      - name: 📝 Terraform Plan - Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          PLAN: "terraform\n${{ steps.plan.outputs.stdout }}"
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const output = `#### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
+            #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
+            #### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
+            #### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
+
+            <details><summary>Show Plan</summary>
+
+            \`\`\`
+            ${process.env.PLAN}
+            \`\`\`
+
+            </details>
+
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Working Directory: \`${{ env.TF_ROOT }}\`, Workflow: \`${{ github.workflow }}\`*`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+      - name: ✅ Terraform Plan - Check Status
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ "${{ steps.plan.outcome }}" == "failure" ]; then
+            echo "❌ Terraform Plan failed"
+            exit 1
+          else
+            echo "✅ Terraform Plan passed"
+          fi
+
+      - name: 📦 Terraform Plan - Upload Artifact
+        if: (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') && steps.plan.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-${{ github.run_number }}
+          path: |
+            tfplan
+            tfplan.txt
+          retention-days: 5
+
+      # ============================================
+      # TERRAFORM APPLY ACTION
+      # ============================================
+      - name: 🚀 Terraform Apply - Execute Apply
+        id: apply
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.terraform_action == 'apply' || env.TERRAFORM_ACTION == 'apply'))
+        run: |
+          echo "🚀 Executing Terraform Apply..."
+          if [ "$USE_TFVARS_FILE" == "true" ]; then
+            terraform apply -auto-approve -no-color -var-file="$TFVARS_FILE" tfplan
+          else
+            terraform apply -auto-approve -no-color tfplan
+          fi
+          echo "✅ Terraform Apply completed successfully"
+
+      - name: 📊 Terraform Apply - Show Outputs
+        if: steps.apply.outcome == 'success'
+        run: |
+          echo "📊 Terraform Outputs:"
+          terraform output -no-color
+
+      # ============================================
+      # TERRAFORM DESTROY ACTION
+      # ============================================
+      - name: 🗑️ Terraform Destroy - Execute Destroy
+        id: destroy
+        if: github.event_name == 'workflow_dispatch' && (github.event.inputs.terraform_action == 'destroy' || env.TERRAFORM_ACTION == 'destroy')
+        run: |
+          echo "⚠️ WARNING: Executing Terraform Destroy - This will destroy all resources!"
+          echo "🗑️ Executing Terraform Destroy..."
+          if [ "$USE_TFVARS_FILE" == "true" ]; then
+            terraform destroy -auto-approve -no-color -var-file="$TFVARS_FILE"
+          else
+            terraform destroy -auto-approve -no-color
+          fi
+          echo "✅ Terraform Destroy completed successfully"
+
+      - name: 📊 Terraform Destroy - Show Summary
+        if: steps.destroy.outcome == 'success'
+        run: |
+          echo "⚠️ All resources have been destroyed"
+          echo "📊 Destroy Summary: Resources removed from AWS"
+
+

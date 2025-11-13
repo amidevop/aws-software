@@ -1,0 +1,85 @@
+# Production Environment Configuration
+# Copy this file to terraform.tfvars.prod and customize
+
+aws_region   = "us-east-1"
+name_prefix  = "lz-prod"
+tags = {
+  Project     = "LandingZone"
+  Environment = "prod"
+  Owner       = "DevOps"
+  CostCenter  = "Engineering"
+}
+
+# Networking
+vpc_cidr_block       = "10.0.0.0/16"
+public_subnet_count  = 3  # Multi-AZ for high availability
+private_subnet_count = 3
+enable_nat_gateway   = true
+single_nat_gateway   = false  # Per-AZ NAT for redundancy
+
+# Compute - Production hardened
+ec2_use_public_subnets = false  # Private subnets for security
+ec2_create_key_pair    = false  # Use existing/managed keys
+compute_os = "both"
+compute_enable_ssm = true  # SSM for secure access
+
+# Instance counts
+linux_instance_count   = 5
+windows_instance_count = 3
+
+linux_instance_defaults = {
+  instance_type = "t3.medium"
+  subnet_index  = 0
+  volume_size_gb = 50
+}
+
+windows_instance_defaults = {
+  instance_type = "t3.large"
+  subnet_index  = 1
+  volume_size_gb = 100
+}
+
+# Security - Production settings
+enforce_alb_only_ingress = true  # Only ALB can reach instances
+app_port = 80
+
+# ALB with HTTPS
+enable_alb               = true
+alb_listener_port         = 80
+alb_enable_https          = true
+# alb_certificate_arn should be set via GitHub Secret: ALB_CERTIFICATE_ARN
+alb_redirect_http_to_https = true
+
+alb_health_check = {
+  path                = "/health"
+  healthy_threshold   = 2
+  unhealthy_threshold = 3
+  interval            = 30
+  timeout             = 5
+  matcher             = "200"
+}
+
+# S3
+create_s3_bucket       = true
+s3_bucket_name         = "lz-prod-storage"
+s3_enable_versioning   = true
+s3_enable_sse          = true
+s3_block_public_access = true
+
+# RDS - Production settings
+create_rds                 = true
+rds_engine                 = "mysql"
+rds_engine_version         = "8.0"
+rds_parameter_group_family = "mysql8.0"
+rds_instance_class         = "db.t3.medium"
+rds_allocated_storage      = 100
+rds_max_allocated_storage  = 500
+rds_storage_type           = "gp3"
+rds_username               = "admin"
+# rds_password should be set via GitHub Secret: RDS_PASSWORD
+rds_db_name                = "proddb"
+rds_multi_az               = true  # High availability
+rds_publicly_accessible    = false
+rds_backup_retention_period = 30  # 30 days for production
+rds_deletion_protection    = true  # Prevent accidental deletion
+

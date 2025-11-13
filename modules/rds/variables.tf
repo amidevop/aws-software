@@ -1,0 +1,80 @@
+variable "create" {
+  type    = bool
+  default = true
+}
+
+variable "name_prefix" {
+  type = string
+}
+
+variable "vpc_id" {
+  type = string
+}
+
+variable "subnet_ids" {
+  type = list(string)
+}
+
+variable "engine" {
+  type = string
+}
+
+variable "engine_version" {
+  type = string
+}
+
+variable "family" {
+  type = string
+}
+
+variable "instance_class" {
+  type = string
+}
+
+variable "allocated_storage" {
+  type = number
+}
+
+variable "max_allocated_storage" {
+  type = number
+}
+
+variable "storage_type" {
+  type = string
+}
+
+variable "username" {
+  type = string
+}
+
+variable "password" {
+  type      = string
+  sensitive = true
+}
+
+variable "db_name" {
+  type = string
+}
+
+variable "multi_az" {
+  type = bool
+}
+
+variable "publicly_accessible" {
+  type = bool
+}
+
+variable "backup_retention_period" {
+  type = number
+}
+
+variable "deletion_protection" {
+  type = bool
+}
+
+variable "tags" {
+  type    = map(string)
+  default = {}
+}
+
+
